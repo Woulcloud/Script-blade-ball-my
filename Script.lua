@@ -1,0 +1,605 @@
+--[[
+    Eagle Blade Ball — переработанная версия
+    Исправления:
+      • синтаксическая ошибка в GetOrLoadTrack (отсутствовал if)
+      • защита от nil в replay / fire
+      • убран мусор captured.args
+      • spamEnabled теперь проверяется внутри потока
+      • сброс кэшей при респавне
+      • оптимизация Is_Curved (единый расчёт дистанции)
+      • accuracyMultiplier настраивается слайдером
+      • UIListLayout для UI
+      • проверка hook перед использованием
+]]
+
+local Players           = game:GetService("Players")
+local RunService        = game:GetService("RunService")
+local UserInputService  = game:GetService("UserInputService")
+local StarterGui        = game:GetService("StarterGui")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Stats             = game:GetService("Stats")
+
+local Player = Players.LocalPlayer
+local Balls  = workspace:WaitForChild("Balls")
+
+--== hookfunction ==--
+local hook = rawget(getfenv(), "hookfunction")
+    or (getgenv and getgenv().hookfunction)
+    or hookfunction
+
+assert(hook, "hookfunction недоступен — нужна эксплойт-среда (Synapse, Script-Ware, Fluxus и т.п.)")
+
+--== Константы ==--
+local HASH = "5455ef47-de02-4074-808c-8d82c2cd12ec"
+local byte, char      = string.byte, string.char
+local floor, bxor     = math.floor, bit32.bxor
+local CLICKS_NEEDED   = 3
+
+--== Состояние ==--
+local captured, votes, key = {}, {}, nil
+local parried_balls, triggered_balls = {}, {}
+
+local autoParryEnabled  = false
+local triggerBotEnabled = false
+local spamEnabled       = false
+local isActivated       = false
+local menuOpen          = true
+local clickCount        = 0
+
+local accuracyMultiplier = 1.285
+
+--== Утилиты ==--
+local function timestamp()
+    return tostring(floor(workspace:GetServerTimeNow() * 100))
+end
+
+local function ShowNotification(title, text, duration)
+    pcall(function()
+        StarterGui:SetCore("SendNotification", {
+            Title = title,
+            Text  = text,
+            Duration = duration or 3,
+        })
+    end)
+end
+
+local function GetPing()
+    local ok, result = pcall(function()
+        return Stats.Network.ServerStatsItem["Data Ping"]:GetValue()
+    end)
+    return ok and result or 100
+end
+
+--== XOR-обучение токена ==--
+local function learn(token, stamp)
+    if #token ~= #stamp then return false end
+    for i = 1, #token do
+        local value = bxor(byte(token, i), (byte(stamp, i) + i) % 256)
+        local counts = votes[i] or {}
+        votes[i] = counts
+        counts[value] = (counts[value] or 0) + 1
+    end
+    local nextKey = {}
+    for i = 1, #token do
+        local best, highest = 0, -1
+        for value, count in pairs(votes[i]) do
+            if count > highest then best, highest = value, count end
+        end
+        nextKey[i] = best
+    end
+    key = nextKey
+    return true
+end
+
+local function makeToken()
+    if not key then return nil end
+    local stamp = timestamp()
+    local out = {}
+    for i = 1, #stamp do
+        local value = key[i] or key[#key]
+        if not value then return nil end
+        out[i] = char(bxor((byte(stamp, i) + i) % 256, value))
+    end
+    return table.concat(out)
+end
+
+--== Хук RemoteEvent ==--
+local fire
+do
+    local template = Instance.new("RemoteEvent")
+    fire = hook(template.FireServer, function(self, ...)
+        local args = table.pack(...)
+        if args[1] ~= HASH or type(args[3]) ~= "string" then
+            return fire(self, ...)
+        end
+        captured = {
+            remote     = self,
+            sessionKey = args[2],
+            token      = args[3],
+            timing     = args[4],
+            tailBool   = args[8],
+        }
+        learn(args[3], timestamp())
+        return fire(self, ...)
+    end)
+end
+
+--== Воспроизведение паринга ==--
+local function replay()
+    if not fire or not captured.remote or not captured.sessionKey then return end
+    local token = makeToken()
+    if not token then return end
+
+    local camera = workspace.CurrentCamera
+    if not camera then return end
+
+    local points = {}
+    local alive = workspace:FindFirstChild("Alive")
+    if alive then
+        for _, character in ipairs(alive:GetChildren()) do
+            local root = character:FindFirstChild("HumanoidRootPart")
+            if root then
+                points[character.Name] = camera:WorldToScreenPoint(root.Position)
+            end
+        end
+    end
+
+    local mouse = UserInputService:GetMouseLocation()
+    local timing = captured.timing or 0.5
+    local tail   = captured.tailBool or false
+
+    fire(captured.remote, HASH, captured.sessionKey, token, timing, camera.CFrame, points, { mouse.X, mouse.Y }, tail)
+end
+
+local function Parry()
+    if not captured.remote or not captured.sessionKey then return end
+    replay()
+end
+
+--== Анимация GrabParry ==--
+local SwordAPI = ReplicatedStorage:WaitForChild("Shared"):WaitForChild("SwordAPI")
+local AnimFix_Cache = {}
+local Loaded_Tracks = {}
+
+local function GetParryAnimation(swordName)
+    if not swordName or swordName == "" then
+        return SwordAPI.Collection.Default:FindFirstChild("GrabParry")
+    end
+    if AnimFix_Cache[swordName] then return AnimFix_Cache[swordName] end
+
+    local ok, swordData = pcall(function()
+        return ReplicatedStorage.Shared.ReplicatedInstances.Swords.GetSword:Invoke(swordName)
+    end)
+
+    if not ok or type(swordData) ~= "table" or not swordData.AnimationType then
+        AnimFix_Cache[swordName] = SwordAPI.Collection.Default:FindFirstChild("GrabParry")
+        return AnimFix_Cache[swordName]
+    end
+
+    for _, obj in pairs(SwordAPI.Collection:GetChildren()) do
+        if obj.Name == swordData.AnimationType then
+            local anim = obj:FindFirstChild("GrabParry") or obj:FindFirstChild("Grab")
+            if anim then
+                AnimFix_Cache[swordName] = anim
+                return anim
+            end
+        end
+    end
+
+    AnimFix_Cache[swordName] = SwordAPI.Collection.Default:FindFirstChild("GrabParry")
+    return AnimFix_Cache[swordName]
+end
+
+local function GetOrLoadTrack()
+    local char = Player.Character
+    if not char then return nil end
+    local humanoid = char:FindFirstChildOfClass("Humanoid")
+    if not humanoid then return nil end
+    local animator = humanoid:FindFirstChild("Animator")
+    if not animator then return nil end
+
+    local currentSword = char:GetAttribute("CurrentlyEquippedSword") or "Default"
+
+    if Loaded_Tracks.Character ~= char then
+        Loaded_Tracks = { Character = char }
+    end
+
+    -- ИСПРАВЛЕНО: было пропущено "if"
+    if Loaded_Tracks[currentSword] then
+        return Loaded_Tracks[currentSword]
+    end
+
+    local animation = GetParryAnimation(currentSword)
+    if not animation then return nil end
+
+    local ok, track = pcall(function()
+        return animator:LoadAnimation(animation)
+    end)
+
+    if ok and track then
+        Loaded_Tracks[currentSword] = track
+        return track
+    end
+    return nil
+end
+
+local function PlayGrabParry()
+    local track = GetOrLoadTrack()
+    if not track then return end
+    pcall(function()
+        track:Stop(0)
+        track.TimePosition = 0
+        track:Play(0, 1, 1)
+    end)
+end
+
+--== Остановка анимации при успешном паринге ==--
+pcall(function()
+    ReplicatedStorage.Remotes.ParrySuccessAll.OnClientEvent:Connect(function()
+        local char = Player.Character
+        if not char then return end
+        local humanoid = char:FindFirstChildOfClass("Humanoid")
+        if not humanoid then return end
+        local animator = humanoid:FindFirstChild("Animator")
+        if not animator then return end
+        for _, track in pairs(animator:GetPlayingAnimationTracks()) do
+            if track.Name == "GrabParry" or track.Name == "Grab" then
+                pcall(function() track:Stop(0.1) end)
+            end
+        end
+    end)
+end)
+
+Player.CharacterAdded:Connect(function()
+    Loaded_Tracks = {}
+    parried_balls = {}
+    triggered_balls = {}
+    votes = {}
+    key = nil
+end)
+
+--== Активация 3 кликами ==--
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed or isActivated then return end
+    if input.UserInputType == Enum.UserInputType.MouseButton1
+    or input.UserInputType == Enum.UserInputType.Touch then
+        clickCount += 1
+        if clickCount < CLICKS_NEEDED then
+            ShowNotification("Activation", ("Click %d/%d"):format(clickCount, CLICKS_NEEDED), 1)
+        else
+            isActivated = true
+            ShowNotification("By Eagle Blade Ball", "Активировано!", 2)
+        end
+    end
+end)
+
+ShowNotification("By Eagle Blade Ball", ("Сделай %d клика для активации"):format(CLICKS_NEEDED), 5)
+
+--== Мяч ==--
+local function GetRealBall()
+    for _, ball in ipairs(Balls:GetChildren()) do
+        if ball:GetAttribute("realBall") == true then
+            return ball
+        end
+    end
+    return nil
+end
+
+--== Кривизна мяча ==--
+local Lerp_Radians = 0
+local Last_Warping = tick()
+
+local function Is_Curved(ball, charPart)
+    local zoomies = ball:FindFirstChild("zoomies")
+    if not zoomies then return false end
+
+    local velocity = zoomies.VectorVelocity
+    if not charPart then return false end
+
+    local toPlayer = charPart.Position - ball.Position
+    local distance = toPlayer.Magnitude
+    if distance <= 25 then return false end
+
+    local speed = velocity.Magnitude
+    if speed < 1 then return false end
+
+    local direction = toPlayer.Unit
+    local dot = direction:Dot(velocity.Unit)
+
+    local ping = GetPing() / 1000
+    local reachTime = distance / speed - ping
+    local radians = math.rad(math.asin(math.clamp(dot, -1, 1)))
+    Lerp_Radians += (radians - Lerp_Radians) * 0.8
+
+    if Lerp_Radians < 0.018 then
+        Last_Warping = tick()
+    end
+
+    if (tick() - Last_Warping) < (reachTime / 1.5) then
+        return true
+    end
+    return dot < (0.5 - ping)
+end
+
+--== AutoParry / TriggerBot ==--
+local function ProcessAutoParry(ball, charPart)
+    if not autoParryEnabled then return end
+
+    local bID = ball:GetDebugId()
+    if ball:GetAttribute("target") ~= Player.Name or parried_balls[bID] then return end
+    if Is_Curved(ball, charPart) then return end
+
+    local zoomies = ball:FindFirstChild("zoomies")
+    if not zoomies then return end
+
+    local velocity = zoomies.VectorVelocity
+    local dist = (charPart.Position - ball.Position).Magnitude
+    local ping = GetPing()
+
+    local pingBase = math.clamp(ping / 100, 5, 17)
+    local rawSpeed = velocity.Magnitude
+    local speedAdjusted = math.clamp(rawSpeed - 9.5, 0, 650)
+    local speedCoefficient = 2.4 + speedAdjusted * 0.002
+    local scaledAg = speedCoefficient * accuracyMultiplier
+    local targetDistance = pingBase + math.max(rawSpeed / scaledAg, 9.5)
+
+    if dist <= targetDistance then
+        parried_balls[bID] = true
+        Parry()
+        task.spawn(PlayGrabParry)
+        ball:GetAttributeChangedSignal("target"):Once(function()
+            parried_balls[bID] = nil
+        end)
+    end
+end
+
+local function ProcessTriggerBot(ball)
+    if not triggerBotEnabled then return end
+    local bID = ball:GetDebugId()
+    if ball:GetAttribute("target") == Player.Name and not triggered_balls[bID] then
+        triggered_balls[bID] = true
+        Parry()
+        task.spawn(PlayGrabParry)
+        ball:GetAttributeChangedSignal("target"):Once(function()
+            triggered_balls[bID] = nil
+        end)
+    end
+end
+
+--== Spam ==--
+local spamThread = nil
+
+local function StartSpam()
+    if spamThread then return end
+    spamThread = RunService.Heartbeat:Connect(function()
+        if not spamEnabled then return end
+        if not captured.remote then return end
+        Parry()
+        task.spawn(PlayGrabParry)
+    end)
+end
+
+local function StopSpam()
+    if spamThread then
+        spamThread:Disconnect()
+        spamThread = nil
+    end
+end
+
+--== Главный цикл ==--
+RunService.Heartbeat:Connect(function()
+    if not isActivated or not captured.remote then return end
+
+    local ball = GetRealBall()
+    if not ball then return end
+
+    local char = Player.Character
+    local charPart = char and char:FindFirstChild("HumanoidRootPart")
+    if not charPart then return end
+
+    if triggerBotEnabled then ProcessTriggerBot(ball) end
+    if autoParryEnabled  then ProcessAutoParry(ball, charPart) end
+end)
+
+--== UI ==--
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "EagleBladeBallMenu"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.Parent = Player:WaitForChild("PlayerGui")
+
+local MainFrame = Instance.new("Frame")
+MainFrame.Name = "MainFrame"
+MainFrame.Size = UDim2.new(0, 260, 0, 300)
+MainFrame.Position = UDim2.new(0, 20, 0, 80)
+MainFrame.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
+MainFrame.BorderSizePixel = 0
+MainFrame.Active = true
+MainFrame.Draggable = true
+MainFrame.ClipsDescendants = true
+MainFrame.Parent = ScreenGui
+
+local MainCorner = Instance.new("UICorner")
+MainCorner.CornerRadius = UDim.new(0, 8)
+MainCorner.Parent = MainFrame
+
+local Title = Instance.new("TextLabel")
+Title.Size = UDim2.new(1, 0, 0, 35)
+Title.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+Title.BorderSizePixel = 0
+Title.Text = "  By Eagle Blade Ball"
+Title.TextColor3 = Color3.fromRGB(255, 140, 0)
+Title.TextSize = 14
+Title.Font = Enum.Font.GothamBold
+Title.TextXAlignment = Enum.TextXAlignment.Left
+Title.Parent = MainFrame
+
+local ToggleBtn = Instance.new("TextButton")
+ToggleBtn.Size = UDim2.new(0, 35, 0, 25)
+ToggleBtn.Position = UDim2.new(1, -45, 0, 5)
+ToggleBtn.BackgroundColor3 = Color3.fromRGB(255, 140, 0)
+ToggleBtn.BorderSizePixel = 0
+ToggleBtn.Text = "—"
+ToggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+ToggleBtn.TextSize = 18
+ToggleBtn.Font = Enum.Font.GothamBold
+ToggleBtn.Parent = Title
+
+local ToggleCorner = Instance.new("UICorner")
+ToggleCorner.CornerRadius = UDim.new(0, 6)
+ToggleCorner.Parent = ToggleBtn
+
+local ContentFrame = Instance.new("Frame")
+ContentFrame.Name = "Content"
+ContentFrame.Size = UDim2.new(1, -20, 1, -50)
+ContentFrame.Position = UDim2.new(0, 10, 0, 42)
+ContentFrame.BackgroundTransparency = 1
+ContentFrame.Parent = MainFrame
+
+local ListLayout = Instance.new("UIListLayout")
+ListLayout.Padding = UDim.new(0, 6)
+ListLayout.SortOrder = Enum.SortOrder.LayoutOrder
+ListLayout.Parent = ContentFrame
+
+local function CreateButton(name, order)
+    local btn = Instance.new("TextButton")
+    btn.Name = name .. "Btn"
+    btn.Size = UDim2.new(1, 0, 0, 38)
+    btn.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    btn.BorderSizePixel = 0
+    btn.Text = name .. ": OFF"
+    btn.TextColor3 = Color3.fromRGB(0, 0, 0)
+    btn.TextSize = 14
+    btn.Font = Enum.Font.GothamMedium
+    btn.LayoutOrder = order
+    btn.Parent = ContentFrame
+
+    local c = Instance.new("UICorner")
+    c.CornerRadius = UDim.new(0, 6)
+    c.Parent = btn
+
+    return btn
+end
+
+local AutoParryBtn  = CreateButton("Auto Parry", 1)
+local TriggerBotBtn = CreateButton("Trigger Bot", 2)
+local SpamBtn       = CreateButton("Spam", 3)
+
+--== Слайдер точности ==--
+local SliderLabel = Instance.new("TextLabel")
+SliderLabel.Size = UDim2.new(1, 0, 0, 20)
+SliderLabel.BackgroundTransparency = 1
+SliderLabel.Text = ("Accuracy: %.3f"):format(accuracyMultiplier)
+SliderLabel.TextColor3 = Color3.fromRGB(255, 200, 100)
+SliderLabel.TextSize = 13
+SliderLabel.Font = Enum.Font.GothamMedium
+SliderLabel.LayoutOrder = 4
+SliderLabel.Parent = ContentFrame
+
+local Slider = Instance.new("TextButton")
+Slider.Size = UDim2.new(1, 0, 0, 20)
+Slider.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+Slider.BorderSizePixel = 0
+Slider.Text = ""
+Slider.LayoutOrder = 5
+Slider.Parent = ContentFrame
+
+local SliderFill = Instance.new("Frame")
+SliderFill.Size = UDim2.new(0.5, 0, 1, 0)
+SliderFill.BackgroundColor3 = Color3.fromRGB(255, 140, 0)
+SliderFill.BorderSizePixel = 0
+SliderFill.Parent = Slider
+
+local SliderCorner = Instance.new("UICorner")
+SliderCorner.CornerRadius = UDim.new(0, 6)
+SliderCorner.Parent = Slider
+
+local function SetSliderFromX(x)
+    local rel = math.clamp((x - Slider.AbsolutePosition.X) / Slider.AbsoluteSize.X, 0, 1)
+    accuracyMultiplier = 0.5 + rel * 2.0
+    SliderFill.Size = UDim2.new(rel, 0, 1, 0)
+    SliderLabel.Text = ("Accuracy: %.3f"):format(accuracyMultiplier)
+end
+
+Slider.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1
+    or input.UserInputType == Enum.UserInputType.Touch then
+        SetSliderFromX(input.Position.X)
+    end
+end)
+
+Slider.InputChanged:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseMovement
+    or input.UserInputType == Enum.UserInputType.Touch then
+        if UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
+        or input.UserInputType == Enum.UserInputType.Touch then
+            SetSliderFromX(input.Position.X)
+        end
+    end
+end)
+
+--== Floating Trigger ==--
+local FloatingBtn = Instance.new("TextButton")
+FloatingBtn.Name = "FloatingTriggerBot"
+FloatingBtn.Size = UDim2.new(0, 130, 0, 45)
+FloatingBtn.Position = UDim2.new(0, 20, 0, 400)
+FloatingBtn.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+FloatingBtn.BorderSizePixel = 0
+FloatingBtn.Text = "TRIGGER: OFF"
+FloatingBtn.TextColor3 = Color3.fromRGB(0, 0, 0)
+FloatingBtn.TextSize = 14
+FloatingBtn.Font = Enum.Font.GothamBold
+FloatingBtn.Active = true
+FloatingBtn.Draggable = true
+FloatingBtn.Parent = ScreenGui
+
+local FloatingCorner = Instance.new("UICorner")
+FloatingCorner.CornerRadius = UDim.new(0, 8)
+FloatingCorner.Parent = FloatingBtn
+
+--== Обновление UI ==--
+local function UpdateTriggerUI()
+    local state = triggerBotEnabled and "ON" or "OFF"
+    TriggerBotBtn.Text = "Trigger Bot: " .. state
+    TriggerBotBtn.BackgroundColor3 = triggerBotEnabled and Color3.fromRGB(100, 255, 100) or Color3.fromRGB(255, 255, 255)
+    FloatingBtn.Text = "TRIGGER: " .. state
+    FloatingBtn.BackgroundColor3 = triggerBotEnabled and Color3.fromRGB(100, 255, 100) or Color3.fromRGB(255, 255, 255)
+end
+
+local FULL_SIZE = UDim2.new(0, 260, 0, 300)
+local MIN_SIZE  = UDim2.new(0, 260, 0, 35)
+
+ToggleBtn.MouseButton1Click:Connect(function()
+    menuOpen = not menuOpen
+    if menuOpen then
+        MainFrame.Size = FULL_SIZE
+        ContentFrame.Visible = true
+        ToggleBtn.Text = "—"
+    else
+        MainFrame.Size = MIN_SIZE
+        ContentFrame.Visible = false
+        ToggleBtn.Text = "□"
+    end
+end)
+
+AutoParryBtn.MouseButton1Click:Connect(function()
+    autoParryEnabled = not autoParryEnabled
+    AutoParryBtn.Text = "Auto Parry: " .. (autoParryEnabled and "ON" or "OFF")
+    AutoParryBtn.BackgroundColor3 = autoParryEnabled and Color3.fromRGB(100, 255, 100) or Color3.fromRGB(255, 255, 255)
+end)
+
+TriggerBotBtn.MouseButton1Click:Connect(function()
+    triggerBotEnabled = not triggerBotEnabled
+    UpdateTriggerUI()
+end)
+
+SpamBtn.MouseButton1Click:Connect(function()
+    spamEnabled = not spamEnabled
+    SpamBtn.Text = "Spam: " .. (spamEnabled and "ON" or "OFF")
+    SpamBtn.BackgroundColor3 = spamEnabled and Color3.fromRGB(255, 120, 0) or Color3.fromRGB(255, 255, 255)
+    if spamEnabled then StartSpam() else StopSpam() end
+end)
+
+FloatingBtn.MouseButton1Click:Connect(function()
+    triggerBotEnabled = not triggerBotEnabled
+    UpdateTriggerUI()
+end)
