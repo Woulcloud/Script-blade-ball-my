@@ -14,7 +14,7 @@ local byte, char, floor, bxor = string.byte, string.char, math.floor, bit32.bxor
 local captured, votes, key = {}, {}, nil
 local spamRunning, spamHeartbeat, antilagEnabled = false, nil, false
 local originalSettings, lastBallCheck = nil, 0
-local spamCPS, actualCPS, cpsCounter, lastCPSTime = 1500, 0, 0, tick()
+local spamCPS, actualCPS, cpsCounter, lastCPSTime = 200, 0, 0, tick()
 local currentPing, lastPingUpdate, PING_UPDATE_INTERVAL = 0, 0, 1.0
 local ANIM_COOLDOWN, LastPlayTime = 0.05, 0
 local currentFPS = 60
@@ -210,37 +210,21 @@ pcall(function()
     end)
 end)
 
-local spamThreads = {}
-local SPAM_THREAD_COUNT = 15
-
-local function SpamThread()
-    while spamRunning do
-        Parry()
-        PlayGrabParry()
-        task.wait()
-    end
-end
-
 local function StartSpam()
     if spamRunning then return end
     spamRunning = true
-    for i = 1, SPAM_THREAD_COUNT do
-        local th = task.spawn(SpamThread)
-        table.insert(spamThreads, th)
-    end
+    local delay = 1 / spamCPS
+    
     spamHeartbeat = RunService.Heartbeat:Connect(function()
         if not spamRunning then return end
         Parry()
         task.spawn(PlayGrabParry)
+        task.wait(delay)
     end)
 end
 
 local function StopSpam()
     spamRunning = false
-    for _, th in ipairs(spamThreads) do
-        pcall(function() task.cancel(th) end)
-    end
-    spamThreads = {}
     if spamHeartbeat then
         spamHeartbeat:Disconnect()
         spamHeartbeat = nil
@@ -499,7 +483,7 @@ local CPSLabel = Instance.new("TextLabel")
 CPSLabel.Size = UDim2.new(1, -10, 0, 18)
 CPSLabel.Position = UDim2.new(0, 5, 0, 3)
 CPSLabel.BackgroundTransparency = 1
-CPSLabel.Text = "CPS: 0 / 1500"
+CPSLabel.Text = "CPS: 0 / 200"
 CPSLabel.TextColor3 = WHITE
 CPSLabel.TextSize = 10
 CPSLabel.Font = Enum.Font.GothamBold
@@ -549,7 +533,7 @@ local CPSFillCorner = Instance.new("UICorner")
 CPSFillCorner.CornerRadius = UDim.new(0, 5)
 CPSFillCorner.Parent = CPSFill
 
-local CPS_MIN, CPS_MAX = 50, 1500
+local CPS_MIN, CPS_MAX = 50, 200
 local function SetCPSFromX(x)
     local rel = math.clamp((x - CPSSlider.AbsolutePosition.X) / CPSSlider.AbsoluteSize.X, 0, 1)
     spamCPS = math.floor(CPS_MIN + rel * (CPS_MAX - CPS_MIN) + 0.5)
@@ -606,9 +590,8 @@ local function CreateQuickBtn(label, cpsValue, order)
     return btn
 end
 
+-- Оставлена только кнопка 200
 CreateQuickBtn("200", 200, 1)
-CreateQuickBtn("500", 500, 2)
-CreateQuickBtn("1500", 1500, 3)
 
 local StatusLabel = Instance.new("TextLabel")
 StatusLabel.Size = UDim2.new(1, 0, 0, 12)
