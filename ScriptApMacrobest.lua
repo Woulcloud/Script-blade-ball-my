@@ -6,20 +6,21 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Stats = game:GetService("Stats")
 local TweenService = game:GetService("TweenService")
 local Lighting = game:GetService("Lighting")
+
 local Player = Players.LocalPlayer
 local hook = getgenv and getgenv().hookfunction or hookfunction
 local HASH = "5455ef47-de02-4074-808c-8d82c2cd12ec"
 local byte, char, floor, bxor = string.byte, string.char, math.floor, bit32.bxor
 local captured, votes, key = {}, {}, nil
-local spamRunning, spamHeartbeat, boostEnabled = false, nil, false
+local spamRunning, spamHeartbeat, antilagEnabled = false, nil, false
 local originalSettings, lastBallCheck = nil, 0
 local spamCPS, actualCPS, cpsCounter, lastCPSTime = 1500, 0, 0, tick()
 local currentPing, lastPingUpdate, PING_UPDATE_INTERVAL = 0, 0, 1.0
 local ANIM_COOLDOWN, LastPlayTime = 0.05, 0
 local currentFPS = 60
-local PINK = Color3.fromRGB(255, 105, 180)
-local DARK = Color3.fromRGB(10, 10, 10)
-local BG = Color3.fromRGB(18, 18, 18)
+local WHITE = Color3.fromRGB(255, 255, 255)
+local BLACK = Color3.fromRGB(0, 0, 0)
+local BG = Color3.fromRGB(15, 15, 15)
 
 local function timestamp() return tostring(floor(workspace:GetServerTimeNow() * 100)) end
 
@@ -209,9 +210,24 @@ pcall(function()
     end)
 end)
 
+local spamThreads = {}
+local SPAM_THREAD_COUNT = 15
+
+local function SpamThread()
+    while spamRunning do
+        Parry()
+        PlayGrabParry()
+        task.wait()
+    end
+end
+
 local function StartSpam()
     if spamRunning then return end
     spamRunning = true
+    for i = 1, SPAM_THREAD_COUNT do
+        local th = task.spawn(SpamThread)
+        table.insert(spamThreads, th)
+    end
     spamHeartbeat = RunService.Heartbeat:Connect(function()
         if not spamRunning then return end
         Parry()
@@ -221,6 +237,10 @@ end
 
 local function StopSpam()
     spamRunning = false
+    for _, th in ipairs(spamThreads) do
+        pcall(function() task.cancel(th) end)
+    end
+    spamThreads = {}
     if spamHeartbeat then
         spamHeartbeat:Disconnect()
         spamHeartbeat = nil
@@ -264,10 +284,10 @@ local function RestoreOriginalSettings()
     originalSettings = nil
 end
 
-local function EnableBoost()
-    if boostEnabled then return end
+local function EnableAntiLag()
+    if antilagEnabled then return end
     SaveOriginalSettings()
-    boostEnabled = true
+    antilagEnabled = true
     pcall(function()
         Lighting.GlobalShadows = false
         Lighting.Brightness = 0
@@ -288,7 +308,7 @@ local function EnableBoost()
     end
     task.spawn(function()
         for _, obj in ipairs(workspace:GetDescendants()) do
-            if not boostEnabled then break end
+            if not antilagEnabled then break end
             pcall(function()
                 if obj:IsA("ParticleEmitter") or obj:IsA("Trail") or obj:IsA("Beam") or obj:IsA("Fire") or obj:IsA("Smoke") or obj:IsA("Sparkles") or obj:IsA("PointLight") or obj:IsA("SpotLight") or obj:IsA("SurfaceLight") then
                     disabledObjects[obj] = obj.Enabled
@@ -310,14 +330,14 @@ local function EnableBoost()
     end)
 end
 
-local function DisableBoost()
-    if not boostEnabled then return end
-    boostEnabled = false
+local function DisableAntiLag()
+    if not antilagEnabled then return end
+    antilagEnabled = false
     RestoreOriginalSettings()
 end
 
 local function AutoClashBoost()
-    if not boostEnabled then return end
+    if not antilagEnabled then return end
     local now = tick()
     if now - lastBallCheck < 1 then return end
     lastBallCheck = now
@@ -341,10 +361,9 @@ ScreenGui.ResetOnSpawn = false
 ScreenGui.Parent = Player:WaitForChild("PlayerGui")
 
 local MainFrame = Instance.new("Frame")
-MainFrame.Size = UDim2.new(0, 190, 0, 330)
+MainFrame.Size = UDim2.new(0, 210, 0, 350)
 MainFrame.Position = UDim2.new(0, 20, 0, 80)
 MainFrame.BackgroundColor3 = BG
-MainFrame.BackgroundTransparency = 0
 MainFrame.BorderSizePixel = 0
 MainFrame.Active = true
 MainFrame.Draggable = true
@@ -356,18 +375,16 @@ MainCorner.CornerRadius = UDim.new(0, 10)
 MainCorner.Parent = MainFrame
 
 local MainStroke = Instance.new("UIStroke")
-MainStroke.Color = PINK
+MainStroke.Color = Color3.fromRGB(40, 40, 40)
 MainStroke.Thickness = 1.5
-MainStroke.Transparency = 0.2
 MainStroke.Parent = MainFrame
 
 local Title = Instance.new("TextLabel")
 Title.Size = UDim2.new(1, 0, 0, 32)
-Title.BackgroundColor3 = DARK
-Title.BackgroundTransparency = 0.4
+Title.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
 Title.BorderSizePixel = 0
 Title.Text = "  Ruqwiri Ap Macro"
-Title.TextColor3 = PINK
+Title.TextColor3 = WHITE
 Title.TextSize = 12
 Title.Font = Enum.Font.GothamBold
 Title.TextXAlignment = Enum.TextXAlignment.Left
@@ -380,10 +397,10 @@ TitleCorner.Parent = Title
 local ToggleBtn = Instance.new("TextButton")
 ToggleBtn.Size = UDim2.new(0, 26, 0, 20)
 ToggleBtn.Position = UDim2.new(1, -32, 0, 6)
-ToggleBtn.BackgroundColor3 = PINK
+ToggleBtn.BackgroundColor3 = WHITE
 ToggleBtn.BorderSizePixel = 0
 ToggleBtn.Text = "-"
-ToggleBtn.TextColor3 = Color3.fromRGB(0, 0, 0)
+ToggleBtn.TextColor3 = BLACK
 ToggleBtn.TextSize = 12
 ToggleBtn.Font = Enum.Font.GothamBold
 ToggleBtn.Parent = Title
@@ -398,7 +415,7 @@ ContentFrame.Position = UDim2.new(0, 6, 0, 38)
 ContentFrame.BackgroundTransparency = 1
 ContentFrame.BorderSizePixel = 0
 ContentFrame.ScrollBarThickness = 3
-ContentFrame.ScrollBarImageColor3 = PINK
+ContentFrame.ScrollBarImageColor3 = WHITE
 ContentFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
 ContentFrame.Parent = MainFrame
 
@@ -407,7 +424,7 @@ ListLayout.Padding = UDim.new(0, 4)
 ListLayout.SortOrder = Enum.SortOrder.LayoutOrder
 ListLayout.Parent = ContentFrame
 
-local FULL_SIZE, MIN_SIZE = UDim2.new(0, 190, 0, 330), UDim2.new(0, 190, 0, 32)
+local FULL_SIZE, MIN_SIZE = UDim2.new(0, 210, 0, 350), UDim2.new(0, 210, 0, 32)
 local tweenInfo = TweenInfo.new(0.3, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
 local menuOpen = true
 
@@ -432,7 +449,7 @@ local function CreateSectionLabel(text, order)
     lbl.Size = UDim2.new(1, 0, 0, 18)
     lbl.BackgroundTransparency = 1
     lbl.Text = "  " .. text
-    lbl.TextColor3 = PINK
+    lbl.TextColor3 = WHITE
     lbl.TextSize = 10
     lbl.Font = Enum.Font.GothamBold
     lbl.TextXAlignment = Enum.TextXAlignment.Left
@@ -445,10 +462,10 @@ local function CreateButton(name, order)
     local btn = Instance.new("TextButton")
     btn.Name = name .. "Btn"
     btn.Size = UDim2.new(1, 0, 0, 26)
-    btn.BackgroundColor3 = PINK
+    btn.BackgroundColor3 = WHITE
     btn.BorderSizePixel = 0
     btn.Text = name .. ": OFF"
-    btn.TextColor3 = Color3.fromRGB(0, 0, 0)
+    btn.TextColor3 = BLACK
     btn.TextSize = 10
     btn.Font = Enum.Font.GothamBold
     btn.LayoutOrder = order
@@ -464,7 +481,7 @@ local SpamBtn = CreateButton("Spam (E)", 2)
 local ShowSpamBtn = CreateButton("Show Spam", 3)
 
 CreateSectionLabel("Optimizations", 4)
-local BoostFPSBtn = CreateButton("Boost FPS", 5)
+local AntiLagBtn = CreateButton("Anti Lag", 5)
 local ShowStatsBtn = CreateButton("Show Stats", 6)
 
 local StatsContainer = Instance.new("Frame")
@@ -478,18 +495,12 @@ local StatsCorner = Instance.new("UICorner")
 StatsCorner.CornerRadius = UDim.new(0, 6)
 StatsCorner.Parent = StatsContainer
 
-local StatsStroke = Instance.new("UIStroke")
-StatsStroke.Color = PINK
-StatsStroke.Thickness = 1
-StatsStroke.Transparency = 0.5
-StatsStroke.Parent = StatsContainer
-
 local CPSLabel = Instance.new("TextLabel")
 CPSLabel.Size = UDim2.new(1, -10, 0, 18)
 CPSLabel.Position = UDim2.new(0, 5, 0, 3)
 CPSLabel.BackgroundTransparency = 1
 CPSLabel.Text = "CPS: 0 / 1500"
-CPSLabel.TextColor3 = PINK
+CPSLabel.TextColor3 = WHITE
 CPSLabel.TextSize = 10
 CPSLabel.Font = Enum.Font.GothamBold
 CPSLabel.TextXAlignment = Enum.TextXAlignment.Left
@@ -500,7 +511,7 @@ PingLabel.Size = UDim2.new(1, -10, 0, 18)
 PingLabel.Position = UDim2.new(0, 5, 0, 22)
 PingLabel.BackgroundTransparency = 1
 PingLabel.Text = "Ping: 0 ms"
-PingLabel.TextColor3 = PINK
+PingLabel.TextColor3 = WHITE
 PingLabel.TextSize = 10
 PingLabel.Font = Enum.Font.GothamBold
 PingLabel.TextXAlignment = Enum.TextXAlignment.Left
@@ -510,7 +521,7 @@ local CPSLabelText = Instance.new("TextLabel")
 CPSLabelText.Size = UDim2.new(1, 0, 0, 14)
 CPSLabelText.BackgroundTransparency = 1
 CPSLabelText.Text = ("Target CPS: %d"):format(spamCPS)
-CPSLabelText.TextColor3 = PINK
+CPSLabelText.TextColor3 = WHITE
 CPSLabelText.TextSize = 10
 CPSLabelText.Font = Enum.Font.GothamBold
 CPSLabelText.LayoutOrder = 8
@@ -530,7 +541,7 @@ CPSSliderCorner.Parent = CPSSlider
 
 local CPSFill = Instance.new("Frame")
 CPSFill.Size = UDim2.new(1, 0, 1, 0)
-CPSFill.BackgroundColor3 = PINK
+CPSFill.BackgroundColor3 = WHITE
 CPSFill.BorderSizePixel = 0
 CPSFill.Parent = CPSSlider
 
@@ -573,11 +584,11 @@ QuickLayout.Parent = QuickFrame
 
 local function CreateQuickBtn(label, cpsValue, order)
     local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(0, 52, 1, 0)
-    btn.BackgroundColor3 = PINK
+    btn.Size = UDim2.new(0, 58, 1, 0)
+    btn.BackgroundColor3 = WHITE
     btn.BorderSizePixel = 0
     btn.Text = label
-    btn.TextColor3 = Color3.fromRGB(0, 0, 0)
+    btn.TextColor3 = BLACK
     btn.TextSize = 10
     btn.Font = Enum.Font.GothamBold
     btn.LayoutOrder = order
@@ -603,7 +614,7 @@ local StatusLabel = Instance.new("TextLabel")
 StatusLabel.Size = UDim2.new(1, 0, 0, 12)
 StatusLabel.BackgroundTransparency = 1
 StatusLabel.Text = "Waiting for parry..."
-StatusLabel.TextColor3 = PINK
+StatusLabel.TextColor3 = WHITE
 StatusLabel.TextSize = 9
 StatusLabel.Font = Enum.Font.Gotham
 StatusLabel.LayoutOrder = 11
@@ -616,10 +627,10 @@ local function CreateFloatingSpam()
     FloatingSpamBtn = Instance.new("TextButton")
     FloatingSpamBtn.Size = UDim2.new(0, 110, 0, 36)
     FloatingSpamBtn.Position = UDim2.new(0, 20, 0, 430)
-    FloatingSpamBtn.BackgroundColor3 = PINK
+    FloatingSpamBtn.BackgroundColor3 = WHITE
     FloatingSpamBtn.BorderSizePixel = 0
     FloatingSpamBtn.Text = "SPAM (E): OFF"
-    FloatingSpamBtn.TextColor3 = Color3.fromRGB(0, 0, 0)
+    FloatingSpamBtn.TextColor3 = BLACK
     FloatingSpamBtn.TextSize = 11
     FloatingSpamBtn.Font = Enum.Font.GothamBold
     FloatingSpamBtn.Active = true
@@ -642,10 +653,7 @@ local function CreateFloatingSpam()
 end
 
 local function DestroyFloatingSpam()
-    if FloatingSpamBtn then
-        FloatingSpamBtn:Destroy()
-        FloatingSpamBtn = nil
-    end
+    if FloatingSpamBtn then FloatingSpamBtn:Destroy() FloatingSpamBtn = nil end
 end
 
 local FloatingStatsWindow, statsVisible = nil, false
@@ -656,7 +664,6 @@ local function CreateFloatingStats()
     FloatingStatsWindow.Size = UDim2.new(0, 150, 0, 100)
     FloatingStatsWindow.Position = UDim2.new(0, 20, 0, 480)
     FloatingStatsWindow.BackgroundColor3 = BG
-    FloatingStatsWindow.BackgroundTransparency = 0
     FloatingStatsWindow.BorderSizePixel = 0
     FloatingStatsWindow.Active = true
     FloatingStatsWindow.Draggable = true
@@ -665,17 +672,15 @@ local function CreateFloatingStats()
     c.CornerRadius = UDim.new(0, 8)
     c.Parent = FloatingStatsWindow
     local stroke = Instance.new("UIStroke")
-    stroke.Color = PINK
+    stroke.Color = Color3.fromRGB(60, 60, 60)
     stroke.Thickness = 1.5
-    stroke.Transparency = 0.2
     stroke.Parent = FloatingStatsWindow
     local title = Instance.new("TextLabel")
     title.Size = UDim2.new(1, 0, 0, 22)
-    title.BackgroundColor3 = DARK
-    title.BackgroundTransparency = 0.4
+    title.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
     title.BorderSizePixel = 0
     title.Text = "  STATS"
-    title.TextColor3 = PINK
+    title.TextColor3 = WHITE
     title.TextSize = 10
     title.Font = Enum.Font.GothamBold
     title.TextXAlignment = Enum.TextXAlignment.Left
@@ -689,7 +694,7 @@ local function CreateFloatingStats()
     realCpsLabel.Position = UDim2.new(0, 5, 0, 26)
     realCpsLabel.BackgroundTransparency = 1
     realCpsLabel.Text = "Real CPS: 0"
-    realCpsLabel.TextColor3 = PINK
+    realCpsLabel.TextColor3 = WHITE
     realCpsLabel.TextSize = 10
     realCpsLabel.Font = Enum.Font.GothamBold
     realCpsLabel.TextXAlignment = Enum.TextXAlignment.Left
@@ -700,7 +705,7 @@ local function CreateFloatingStats()
     realPingLabel.Position = UDim2.new(0, 5, 0, 48)
     realPingLabel.BackgroundTransparency = 1
     realPingLabel.Text = "Ping: 0 ms"
-    realPingLabel.TextColor3 = PINK
+    realPingLabel.TextColor3 = WHITE
     realPingLabel.TextSize = 10
     realPingLabel.Font = Enum.Font.GothamBold
     realPingLabel.TextXAlignment = Enum.TextXAlignment.Left
@@ -711,7 +716,7 @@ local function CreateFloatingStats()
     realFpsLabel.Position = UDim2.new(0, 5, 0, 70)
     realFpsLabel.BackgroundTransparency = 1
     realFpsLabel.Text = "FPS: 0"
-    realFpsLabel.TextColor3 = PINK
+    realFpsLabel.TextColor3 = WHITE
     realFpsLabel.TextSize = 10
     realFpsLabel.Font = Enum.Font.GothamBold
     realFpsLabel.TextXAlignment = Enum.TextXAlignment.Left
@@ -719,10 +724,7 @@ local function CreateFloatingStats()
 end
 
 local function DestroyFloatingStats()
-    if FloatingStatsWindow then
-        FloatingStatsWindow:Destroy()
-        FloatingStatsWindow = nil
-    end
+    if FloatingStatsWindow then FloatingStatsWindow:Destroy() FloatingStatsWindow = nil end
 end
 
 local function ToggleSpam()
@@ -750,13 +752,13 @@ ShowSpamBtn.MouseButton1Click:Connect(function()
     end
 end)
 
-BoostFPSBtn.MouseButton1Click:Connect(function()
-    if boostEnabled then
-        DisableBoost()
-        BoostFPSBtn.Text = "Boost FPS: OFF"
+AntiLagBtn.MouseButton1Click:Connect(function()
+    if antilagEnabled then
+        DisableAntiLag()
+        AntiLagBtn.Text = "Anti Lag: OFF"
     else
-        EnableBoost()
-        BoostFPSBtn.Text = "Boost FPS: ON"
+        EnableAntiLag()
+        AntiLagBtn.Text = "Anti Lag: ON"
     end
 end)
 
@@ -777,7 +779,7 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
 end)
 
 RunService.Heartbeat:Connect(function()
-    if boostEnabled then AutoClashBoost() end
+    if antilagEnabled then AutoClashBoost() end
 end)
 
 task.spawn(function()
@@ -797,9 +799,9 @@ end)
 Player.CharacterAdded:Connect(function()
     Loaded_Tracks = {}
     LastPlayedTrack = nil
-    if boostEnabled then
+    if antilagEnabled then
         task.wait(1)
-        EnableBoost()
+        EnableAntiLag()
     end
 end)
 
@@ -816,9 +818,9 @@ task.spawn(function()
         CPSLabel.Text = ("CPS: %d / %d"):format(actualCPS, spamCPS)
         PingLabel.Text = ("Ping: %d ms"):format(math.floor(ping))
         if captured.sessionKey then
-            StatusLabel.Text = ("Token: OK | Spam: %s | FPS: %s"):format(
+            StatusLabel.Text = ("Token: OK | Spam: %s | Lag: %s"):format(
                 spamRunning and "ON" or "OFF",
-                boostEnabled and "BOOST" or "OFF"
+                antilagEnabled and "ON" or "OFF"
             )
         else
             StatusLabel.Text = "Do 1 manual parry to catch token"
