@@ -12,13 +12,12 @@ local hook = getgenv and getgenv().hookfunction or hookfunction
 local HASH = "5455ef47-de02-4074-808c-8d82c2cd12ec"
 local byte, char, floor, bxor = string.byte, string.char, math.floor, bit32.bxor
 local captured, votes, key = {}, {}, nil
-local spamRunning, spamHeartbeat, antilagEnabled = false, nil, false
+local spamRunning, antilagEnabled = false, false
 local originalSettings, lastBallCheck = nil, 0
 local spamCPS, actualCPS, cpsCounter, lastCPSTime = 200, 0, 0, tick()
 local currentPing, lastPingUpdate, PING_UPDATE_INTERVAL = 0, 0, 1.0
 local ANIM_COOLDOWN, LastPlayTime = 0.05, 0
 local currentFPS = 60
-
 local WHITE = Color3.fromRGB(255, 255, 255)
 local BLACK = Color3.fromRGB(0, 0, 0)
 local BG = Color3.fromRGB(15, 15, 15)
