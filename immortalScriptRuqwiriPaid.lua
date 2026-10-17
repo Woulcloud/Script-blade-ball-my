@@ -1,31 +1,11 @@
-repeat task.wait() until game:IsLoaded()
-
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local StatsService = game:GetService("Stats")
 local UserInputService = game:GetService("UserInputService")
 local player = Players.LocalPlayer
 
--- Безопасная загрузка Fluent UI
-local Fluent
-local success, err = pcall(function()
-    Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
-end)
-
-if not success or not Fluent then
-    -- Если GitHub не работает, пробуем зеркало
-    local success2, err2 = pcall(function()
-        Fluent = loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/main.lua"))()
-    end)
-    if not success2 then
-        StarterGui:SetCore("SendNotification", {
-            Title = "Ошибка",
-            Text = "Не удалось загрузить UI. Проверьте интернет.",
-            Duration = 5
-        })
-        return
-    end
-end
+local Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
 
 local Window = Fluent:CreateWindow({
     Title = "Ruqwiri Paid Script",
