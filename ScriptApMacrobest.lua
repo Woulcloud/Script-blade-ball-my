@@ -18,6 +18,7 @@ local spamCPS, actualCPS, cpsCounter, lastCPSTime = 200, 0, 0, tick()
 local currentPing, lastPingUpdate, PING_UPDATE_INTERVAL = 0, 0, 1.0
 local ANIM_COOLDOWN, LastPlayTime = 0.05, 0
 local currentFPS = 60
+
 local WHITE = Color3.fromRGB(255, 255, 255)
 local BLACK = Color3.fromRGB(0, 0, 0)
 local BG = Color3.fromRGB(15, 15, 15)
@@ -210,25 +211,32 @@ pcall(function()
     end)
 end)
 
+local spamThreads = {}
+local SPAM_THREAD_COUNT = 15
+
+local function SpamThread()
+    while spamRunning do
+        Parry()
+        PlayGrabParry()
+        task.wait()
+    end
+end
+
 local function StartSpam()
     if spamRunning then return end
     spamRunning = true
-    local delay = 1 / spamCPS
-    
-    spamHeartbeat = RunService.Heartbeat:Connect(function()
-        if not spamRunning then return end
-        Parry()
-        task.spawn(PlayGrabParry)
-        task.wait(delay)
-    end)
+    for i = 1, SPAM_THREAD_COUNT do
+        local th = task.spawn(SpamThread)
+        table.insert(spamThreads, th)
+    end
 end
 
 local function StopSpam()
     spamRunning = false
-    if spamHeartbeat then
-        spamHeartbeat:Disconnect()
-        spamHeartbeat = nil
+    for _, th in ipairs(spamThreads) do
+        pcall(function() task.cancel(th) end)
     end
+    spamThreads = {}
 end
 
 local disabledObjects = {}
@@ -590,7 +598,6 @@ local function CreateQuickBtn(label, cpsValue, order)
     return btn
 end
 
--- Оставлена только кнопка 200
 CreateQuickBtn("200", 200, 1)
 
 local StatusLabel = Instance.new("TextLabel")
