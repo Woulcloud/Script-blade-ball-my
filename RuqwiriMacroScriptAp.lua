@@ -117,8 +117,12 @@ local function replay()
     camCache = workspace.CurrentCamera
     if not camCache then return end
     refreshPoints()
-    local mouse = UserInputService:GetMouseLocation()
-    fire(captured.remote, HASH, captured.sessionKey, token, captured.timing or 0.5, camCache.CFrame, pointsCache, {mouse.X, mouse.Y}, captured.tailBool or false)
+    
+    -- ФИКС: Всегда целимся строго в центр экрана (перекрестие)
+    local centerX = camCache.ViewportSize.X / 2
+    local centerY = camCache.ViewportSize.Y / 2
+    
+    fire(captured.remote, HASH, captured.sessionKey, token, captured.timing or 0.5, camCache.CFrame, pointsCache, {centerX, centerY}, captured.tailBool or false)
     cpsCounter = cpsCounter + 1
 end
 
